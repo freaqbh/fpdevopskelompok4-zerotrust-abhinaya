@@ -1,68 +1,61 @@
-# Analysis
+# Analysis & Evaluation Report — Kelompok 4 (TaskFlow API)
+### M. Abhinaya Al Faruqi (NRP: 5027231011) — Jobdesk 7: Evaluation Analysis, Refleksi & Demo
 
-> Bagian ini akan diisi oleh Rafika Az Zahra Kusumastuti — Jobdesk 2: Implementasi Conditional Deployment Gate
+## 1. Analisis Perbandingan Keamanan (Before vs After)
 
-## Perbandingan Sebelum dan Sesudah Implementasi Zero Trust
+Penerapan prinsip **Zero Trust** ("*Never Trust, Always Verify*") diuji melalui dua skenario utama untuk membuktikan efektivitas keamanan dari modifikasi pipeline CI/CD kami:
 
-Project ini mengimplementasikan konsep **Zero Trust CI/CD Security** dengan menambahkan dua komponen utama:
+| Metrik Evaluasi | Skenario Before (Pipeline Konvensional) | Skenario After (Zero Trust CI/CD) |
+|---|---|---|
+| **Image Container** | `nginx:1.14` | `nginx:latest` (serta uji blokir pada `nginx:1.14`) |
+| **Pengecekan Keamanan** | Dilewati (*Implicit Trust*) | Aktif via Trivy (*Continuous Verification*) |
+| **Kerentanan HIGH & CRITICAL** | **113 kerentanan** (31 Critical, 82 High) lolos sepenuhnya | **77 kerentanan** (27 Critical, 50 High) diblokir otomatis |
+| **Status Deploy** | **Success** (Vulnerable image berhasil masuk klaster) | **Skipped** jika rentan; **Success** hanya jika bersih |
+| **Prevention Rate (Tingkat Pencegahan)** | **0%** | **100%** |
 
-1. **Automated Vulnerability Scanning** menggunakan Trivy.
-2. **Conditional Deployment Gate** menggunakan GitHub Actions.
+### Analisis Jumlah Kerentanan (Perbedaan Manual vs Pipeline)
+*   **Manual Scan (Riskiyatul - Job 3)** mendeteksi **113 kerentanan** pada `nginx:1.14` karena dijalankan tanpa filter, memetakan seluruh celah termasuk yang belum memiliki solusi (*unfixed*).
+*   **Pipeline Scan (Hasan - Job 1)** mendeteksi **77 kerentanan** (27 Critical, 50 High) karena dikonfigurasi dengan `ignore-unfixed: true`. 
+*   **Justifikasi**: Penggunaan `ignore-unfixed: true` dalam keputusan desain kami bertujuan untuk meminimalisasi *noise* dan mencegah terhambatnya proses *delivery* untuk kerentanan yang belum memiliki patch resmi dari komunitas open-source. Hal ini sejalan dengan aspek efisiensi DevOps tanpa mengabaikan perlindungan terhadap celah yang aktif dieksploitasi (*actionable vulnerabilities*).
 
-### Skenario 1 – Image Rentan
+---
 
-Pada skenario pertama digunakan image:
+## 2. Analisis Perbandingan Kinerja & Overhead Latency
 
-```text
-nginx:1.14
-```
+Penerapan verifikasi keamanan berkelanjutan menambahkan overhead waktu pada proses integrasi. Berikut adalah rincian perbandingan durasi eksekusi pipeline:
 
-Hasil pemindaian Trivy menunjukkan:
+| Stage Pipeline | Skenario Before (Commit `ae0182b`) | Skenario After - Sukses (Commit `406a648`) | Overhead Waktu (Detik) |
+|---|---|---|---|
+| **Build Application** | 6 detik | 6 detik | 0 detik |
+| **Security Scan (Trivy)** | *Dilewati (0s)* | 33 detik | +33 detik |
+| **Deploy** | 2 detik | 2 detik | 0 detik |
+| **Send Notification** | 3 detik | 3 detik | 0 detik |
+| **Runner Setup & Teardown** | 11 detik | 20 detik | +9 detik |
+| **Total Durasi** | **22 detik** | **64 detik (1m 4s)** | **+42 detik** |
 
-* Total Vulnerabilities: 77
-* High: 50
-* Critical: 27
+### Pembahasan Overhead Latency
+Secara matematis, penambahan pemindaian keamanan menyebabkan peningkatan waktu sebesar **190.91%** (selisih 42 detik). 
 
-Karena ditemukan vulnerability dengan severity **HIGH** dan **CRITICAL**, job **Security Scan** gagal sehingga deployment tidak dijalankan.
+Secara teknis, peningkatan ini disebabkan oleh:
+1.  **Unduhan Database Kerentanan**: GitHub Actions runner virtual yang dinamis (*clean environment*) tidak memiliki cache database Trivy, sehingga harus mengunduh data definisi kerentanan sebesar ~100MB+ pada setiap eksekusi.
+2.  **Overhead Runner**: Setup container runner tambahan di GitHub Actions untuk Trivy memerlukan waktu sekitar 9-10 detik.
 
-Hasil pipeline:
+**Justifikasi Kelayakan**: Durasi total **64 detik** secara absolut sangat cepat dan berada jauh di bawah batas toleransi waktu pengiriman perangkat lunak modern (biasanya berkisar antara 5–15 menit). Peningkatan waktu 42 detik ini merupakan harga yang sangat murah dibandingkan kerugian akibat infiltrasi kerentanan kritis di lingkungan produksi.
 
-| Stage             | Status  |
-| ----------------- | ------- |
-| Build Application | Success |
-| Security Scan     | Failed  |
-| Deploy            | Skipped |
+---
 
-### Skenario 2 – Image Aman
+## 3. Korelasi Temuan dengan Literatur Akademis
 
-Pada skenario kedua digunakan image:
+### Hubungan dengan Bhardwaj dkk. (2025)
+Paper utama kami menunjukkan peningkatan *prevention rate* dari 50% ke 100% dengan overhead kinerja yang minimal (+5% hingga +7% di lingkungan GitLab CI terkontrol). 
+*   Di proyek kami, *prevention rate* juga naik ke **100%**. 
+*   Namun, kami mengalami persentase overhead yang lebih tinggi (~190%) karena kami menggunakan runner publik GitHub Actions yang bersifat ephemeral (tidak menyimpan cache), berbeda dari klaster eksperimen Bhardwaj dkk. yang menggunakan runner terdedikasi (*warmed agents*).
 
-```text
-nginx:latest
-```
+### Hubungan dengan Shin dkk. (2025)
+Shin dkk. menekankan pentingnya analisis bertahap di sepanjang SDLC untuk menghindari *implicit trust*. Dengan menempatkan `security-scan` langsung di antara `build` dan `deploy`, serta menguncinya dengan sintaks `needs: security-scan`, kelompok kami berhasil menghilangkan *implicit trust* pada tahap serah terima artefak (*artifact handoff*).
 
-Hasil pipeline:
+---
 
-| Stage             | Status  |
-| ----------------- | ------- |
-| Build Application | Success |
-| Security Scan     | Success |
-| Deploy            | Success |
+## 4. Kesimpulan Akhir
 
-Karena image berhasil melewati proses verifikasi keamanan, deployment dapat dijalankan hingga selesai.
-
-## Dampak Implementasi
-
-Sebelum implementasi Zero Trust, artefak hasil build dapat langsung melanjutkan ke tahap deployment tanpa verifikasi keamanan tambahan.
-
-Setelah implementasi Zero Trust, setiap artefak wajib melewati proses security scanning terlebih dahulu. Deployment hanya dapat dijalankan apabila hasil pemindaian memenuhi kebijakan keamanan yang telah ditentukan.
-
-Implementasi ini berhasil menunjukkan prinsip:
-
-> **Never Trust, Always Verify**
-
-dengan memastikan bahwa artefak yang mengandung vulnerability tidak dapat mencapai tahap deployment.
-
-## Kesimpulan
-
-Berdasarkan hasil pengujian, kombinasi **Trivy Security Scan** dan **Conditional Deployment Gate** berhasil meningkatkan keamanan pipeline CI/CD dengan mencegah artefak yang memiliki vulnerability kategori **HIGH** maupun **CRITICAL** masuk ke tahap deployment.
+Eksperimen membuktikan bahwa **Zero Trust CI/CD** yang kami bangun memberikan peningkatan keamanan yang mutlak (dari Prevention Rate 0% menjadi 100% terhadap image rentan `nginx:1.14`) dengan mengorbankan durasi pipeline sebesar 42 detik. Secara operasional, peningkatan ini sangat layak diterapkan demi mengamankan rantai pasok perangkat lunak (*software supply chain*) aplikasi TaskFlow API.
