@@ -48,15 +48,6 @@ jobs:
           format: 'cyclonedx'
           output: 'sbom.json'
 
-      - name: Upload Security Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-artifacts
-          path: |
-            sbom.json
-            sbom.json.sig
-            cosign.pub
-
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.5.0
 
@@ -68,6 +59,15 @@ jobs:
         env:
           COSIGN_PASSWORD: ""
           COSIGN_YES: "true"
+
+      - name: Upload Security Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-artifacts
+          path: |
+            sbom.json
+            sbom.json.sig
+            cosign.pub
 
       - name: Install Conftest
         run: |
