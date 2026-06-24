@@ -77,7 +77,7 @@ Notification
 
 ## ⚙️ Implementasi
 
-### Security Scan
+### 1. Security Scan & SBOM Generation
 
 Menggunakan:
 
@@ -94,19 +94,34 @@ exit-code: 1
 ```
 
 Apabila ditemukan vulnerability dengan severity HIGH atau CRITICAL maka pipeline otomatis gagal.
+Selain itu, Trivy juga dikonfigurasi untuk mengekstrak **Software Bill of Materials (SBOM)** berformat CycloneDX yang akan digunakan untuk proses verifikasi.
 
 ---
 
-### Conditional Deployment Gate
+### 2. Policy as Code (Conftest)
+Sebelum *deployment*, file konfigurasi Kubernetes (`k8s-deployment.yaml`) diuji menggunakan **Conftest** dengan bahasa Rego (OPA). Terdapat aturan (*policy*) baku yang melarang *container* berjalan dengan akses *root* (`runAsUser: 0`). Jika melanggar, pipeline langsung digagalkan (Shift-Left Security).
 
-Menggunakan dependency antar job pada GitHub Actions.
+---
 
-```yaml
-deploy:
-  needs: security-scan
-```
+### 3. Artifact Signing (Cosign)
+File SBOM yang dihasilkan ditandatangani secara digital (*Blob Signing*) menggunakan **Cosign** (dari Sigstore). Kunci *public* dan *private* dibuat secara dinamis di dalam pipeline. Artifact dan *signature*-nya kemudian diunggah ke GitHub Artifacts untuk diverifikasi pada tahap deployment.
 
-Deployment hanya dapat berjalan apabila Security Scan berhasil.
+---
+
+### 4. Conditional Deployment Gate
+
+Berpegang teguh pada prinsip *"Never Trust, Always Verify"*, *Job* Deploy tidak serta-merta mempercayai hasil dari *Job* Security Scan. Gerbang *deployment* ini menerapkan **Verifikasi Kriptografis Zero Trust** secara bertahap:
+
+1. **Job Dependency (`needs: security-scan`)**
+   Deployment hanya diizinkan untuk *start* apabila *Job* Security Scan sebelumnya dinyatakan sukses.
+2. **Unduh Artifact Mandiri**
+   *Runner* Deploy mengunduh SBOM beserta kunci publik (`cosign.pub`) dan *signature* (`sbom.json.sig`) yang diteruskan dari tahapan sebelumnya.
+3. **Verifikasi Kriptografis Independen**
+   Mengeksekusi `cosign verify-blob` untuk memvalidasi ulang keaslian dokumen SBOM. Jika terdeteksi adanya *tampering* (perubahan isi dokumen oleh *hacker*), gerbang *deploy* tidak akan terbuka dan *pipeline* otomatis dihentikan.
+4. **Setup Infrastruktur Ephemeral**
+   Jika kriptografi valid, *runner* akan membangun infrastruktur Kubernetes secara instan menggunakan **KinD (Kubernetes in Docker)**.
+5. **Real Deployment & Validasi Rollout**
+   Aplikasi langsung dideploy secara sungguhan (`kubectl apply`) ke dalam *namespace* production, dilanjutkan dengan validasi `kubectl rollout status` (batas waktu 90 detik) untuk memastikan *Pod* NGINX benar-benar berjalan dengan sukses.
 
 ---
 
@@ -219,12 +234,26 @@ Screenshot:
 
 ---
 
-### After (Zero Trust Aktif)
+### Skenario Pengujian Zero Trust (Negative & Positive Test)
+
+Untuk mendemonstrasikan pertahanan Zero Trust, dilakukan uji coba serangan (*Negative Testing*) dan pengujian kondisi normal (*Positive Testing*):
+
+#### 1. Negative Test - Pelanggaran Policy as Code (Conftest)
+- **Kondisi**: File YAML dikonfigurasi secara tidak aman untuk berjalan sebagai *root* (`runAsUser: 0`).
+- **Hasil**: *Pipeline* **GAGAL** pada tahap pengecekan Conftest. Akses root diblokir sebelum mencapai infrastruktur Kubernetes.
+![Test negative PaC](evaluation/screenshots/pelanggaran-PaC.png)
+
+#### 2. Negative Test - Supply Chain Tampering (Cosign)
+- **Kondisi**: Menyimulasikan modifikasi file SBOM secara ilegal di proses transisi (menyisipkan paket *malware* fiktif ke dalamnya).
+- **Hasil**: *Pipeline* **GAGAL** di *Job Deploy* pada *Deployment Gate*. Cosign mendeteksi *hash* dokumen SBOM tidak cocok dengan *signature* asli, menolak mendeploy dokumen yang dimodifikasi.
+![Test negative cosign](evaluation/screenshots/negative-test-supply-chain-tampering.png)
+
+#### 3. After (Zero Trust Aktif & Positive Test)
 
 Image:
 
 ```text
-nginx:latest
+nginxinc/nginx-unprivileged:latest
 ```
 
 Hasil:
@@ -247,7 +276,9 @@ Implementasi berhasil menunjukkan bahwa:
 
 - Image rentan berhasil dideteksi oleh Trivy.
 - Deployment dihentikan ketika ditemukan vulnerability HIGH atau CRITICAL.
-- Deployment hanya dapat dijalankan setelah lolos verifikasi keamanan.
+- Miskonfigurasi infrastruktur terkait akses *root* berhasil dicegah oleh Conftest.
+- Integritas hasil pemindaian dijamin oleh verifikasi kriptografis menggunakan Cosign; percobaan *tampering* berhasil digagalkan.
+- Deployment hanya dapat dijalankan setelah lolos seluruh verifikasi keamanan (Zero Trust Validation) dan dieksekusi secara nyata menggunakan klaster Kubernetes (KinD).
 - Prinsip Zero Trust berhasil diterapkan pada pipeline CI/CD.
 
 ---
