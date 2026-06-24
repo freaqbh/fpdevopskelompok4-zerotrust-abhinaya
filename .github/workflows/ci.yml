@@ -60,10 +60,11 @@ jobs:
       - name: Generate Cosign Key Pair, Sign, and Verify
         run: |
           cosign generate-key-pair
-          cosign sign-blob --key cosign.key sbom.json > sbom.json.sig
+          cosign sign-blob --yes --tlog-upload=false --key cosign.key sbom.json > sbom.json.sig
           cosign verify-blob --key cosign.pub --signature sbom.json.sig sbom.json
         env:
           COSIGN_PASSWORD: ""
+          COSIGN_YES: "true"
 
       - name: Install Conftest
         run: |
